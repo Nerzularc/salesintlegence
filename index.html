@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sales Intelligence Command Centre</title>
+  <meta name="description" content="Executive-grade sales analytics platform for business intelligence and decision support." />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+  <!-- Custom styles -->
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Tailwind config override for dark mode -->
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            navy: {
+              900: '#0a0f1e',
+              800: '#0d1426',
+              700: '#111b33',
+              600: '#162040',
+            },
+            accent: {
+              blue: '#3b82f6',
+              cyan: '#06b6d4',
+              violet: '#7c3aed',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased transition-colors duration-300" id="app-body">
+
+  <!-- ═══════════════════════════════════════════════════════
+       LOADING OVERLAY
+  ═══════════════════════════════════════════════════════ -->
+  <div id="loading-overlay" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950" role="status" aria-live="polite" aria-label="Loading dashboard">
+    <div class="loading-spinner mb-4" aria-hidden="true"></div>
+    <p class="text-slate-300 text-sm font-medium" id="loading-message">Loading sales data…</p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       ERROR STATE
+  ═══════════════════════════════════════════════════════ -->
+  <div id="error-overlay" class="hidden fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 p-8" role="alert" aria-live="assertive">
+    <div class="text-red-400 text-5xl mb-4" aria-hidden="true">⚠</div>
+    <h2 class="text-xl font-semibold text-red-300 mb-2">Data Load Failed</h2>
+    <p class="text-slate-400 text-sm text-center max-w-md mb-4" id="error-message">Unable to load sales data. Please ensure you are running this through a local HTTP server.</p>
+    <button onclick="window.location.reload()" class="btn-primary px-4 py-2 rounded text-sm font-medium">Retry</button>
+    <p class="mt-4 text-slate-500 text-xs">Run via: <code class="bg-slate-800 px-2 py-1 rounded">python -m http.server 8000</code> or VS Code Live Server</p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       MAIN APPLICATION LAYOUT
+  ═══════════════════════════════════════════════════════ -->
+  <div id="app-main" class="hidden min-h-screen flex flex-col">
+
+    <!-- ── COMMAND BAR ─────────────────────────────────── -->
+    <header class="command-bar sticky top-0 z-40 px-4 py-2 border-b border-slate-800 flex flex-wrap items-center gap-3" role="banner">
+      <!-- Brand -->
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="brand-icon" aria-hidden="true">◈</span>
+        <div>
+          <h1 class="text-sm font-bold text-slate-100 leading-none">Sales Intelligence</h1>
+          <p class="text-xs text-slate-500 leading-none">Command Centre</p>
+        </div>
+      </div>
+
+      <!-- Period & Data Status -->
+      <div class="flex items-center gap-3 text-xs text-slate-400 ml-2 flex-wrap">
+        <span class="flex items-center gap-1">
+          <span class="text-slate-600" aria-hidden="true">📅</span>
+          <span id="reporting-period">Loading…</span>
+        </span>
+        <span class="flex items-center gap-1">
+          <span class="status-dot" id="data-status-dot" aria-hidden="true"></span>
+          <span id="data-load-time">—</span>
+        </span>
+        <span id="active-filter-badge" class="hidden filter-chip text-xs px-2 py-0.5 rounded-full font-medium"></span>
+        <span id="dq-badge" class="dq-badge text-xs px-2 py-0.5 rounded-full font-medium hidden"></span>
+      </div>
+
+      <!-- Spacer -->
+      <div class="flex-1"></div>
+
+      <!-- Controls -->
+      <div class="flex items-center gap-2">
+        <button id="btn-refresh" class="cmd-btn" title="Re-fetch data from JSON source" aria-label="Refresh data">
+          <span aria-hidden="true">⟳</span> Refresh
+        </button>
+        <button id="btn-export" class="cmd-btn" title="Export current filtered view" aria-label="Export current view">
+          <span aria-hidden="true">↓</span> Export
+        </button>
+        <div class="relative" id="export-menu-container">
+          <div id="export-menu" class="hidden export-menu absolute right-0 top-full mt-1 rounded shadow-xl z-50 min-w-48 py-1" role="menu" aria-label="Export options">
+            <button class="export-menu-item" data-export="csv-filtered" role="menuitem">CSV — Filtered Transactions</button>
+            <button class="export-menu-item" data-export="csv-kpis" role="menuitem">CSV — KPI Summary</button>
+            <button class="export-menu-item" data-export="insights" role="menuitem">Insights Report (Text)</button>
+            <button class="export-menu-item" data-export="print" role="menuitem">Print / Save as PDF</button>
+          </div>
+        </div>
+        <button id="btn-fullscreen" class="cmd-btn" title="Toggle fullscreen" aria-label="Toggle fullscreen">⛶</button>
+        <button id="btn-theme" class="cmd-btn" title="Toggle light/dark theme" aria-label="Toggle theme">☀</button>
+        <button id="btn-reset-filters" class="cmd-btn cmd-btn-danger hidden" title="Reset all filters" aria-label="Reset all filters">✕ Reset Filters</button>
+      </div>
+    </header>
+
+    <!-- ── MAIN CONTENT ─────────────────────────────────── -->
+    <div class="flex flex-1 overflow-hidden">
+
+      <!-- Sidebar Filters -->
+      <aside id="filter-sidebar" class="filter-sidebar w-64 flex-shrink-0 border-r border-slate-800 overflow-y-auto p-4 space-y-5" role="complementary" aria-label="Global filters">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-widest">Filters</h2>
+          <button id="sidebar-toggle" class="cmd-btn text-xs p-1" aria-label="Collapse filters sidebar" title="Collapse sidebar">◀</button>
+        </div>
+
+        <!-- Search -->
+        <div class="filter-group">
+          <label for="search-input" class="filter-label">Search</label>
+          <input type="search" id="search-input" class="filter-input" placeholder="Rep, region, product…" autocomplete="off" aria-label="Search transactions" />
+        </div>
+
+        <!-- Date Range -->
+        <fieldset class="filter-group">
+          <legend class="filter-label">Date Range</legend>
+          <div class="flex gap-1">
+            <input type="date" id="date-from" class="filter-input text-xs" aria-label="Start date" />
+            <input type="date" id="date-to" class="filter-input text-xs" aria-label="End date" />
+          </div>
+        </fieldset>
+
+        <!-- Region -->
+        <div class="filter-group">
+          <label for="filter-region" class="filter-label">Region</label>
+          <select id="filter-region" class="filter-input" multiple size="4" aria-label="Filter by region" aria-multiselectable="true"></select>
+          <p class="filter-hint">Hold Ctrl/⌘ for multi-select</p>
+        </div>
+
+        <!-- Category -->
+        <div class="filter-group">
+          <label for="filter-category" class="filter-label">Product Category</label>
+          <select id="filter-category" class="filter-input" multiple size="4" aria-label="Filter by product category" aria-multiselectable="true"></select>
+          <p class="filter-hint">Hold Ctrl/⌘ for multi-select</p>
+        </div>
+
+        <!-- Customer Type -->
+        <div class="filter-group">
+          <label for="filter-customer-type" class="filter-label">Customer Type</label>
+          <select id="filter-customer-type" class="filter-input" multiple size="2" aria-label="Filter by customer type" aria-multiselectable="true"></select>
+        </div>
+
+        <!-- Sales Channel -->
+        <div class="filter-group">
+          <label for="filter-channel" class="filter-label">Sales Channel</label>
+          <select id="filter-channel" class="filter-input" multiple size="2" aria-label="Filter by sales channel" aria-multiselectable="true"></select>
+        </div>
+
+        <!-- Sales Rep -->
+        <div class="filter-group">
+          <label for="filter-rep" class="filter-label">Sales Representative</label>
+          <select id="filter-rep" class="filter-input" multiple size="5" aria-label="Filter by sales representative" aria-multiselectable="true"></select>
+          <p class="filter-hint">Hold Ctrl/⌘ for multi-select</p>
+        </div>
+
+        <!-- Payment Method -->
+        <div class="filter-group">
+          <label for="filter-payment" class="filter-label">Payment Method</label>
+          <select id="filter-payment" class="filter-input" multiple size="3" aria-label="Filter by payment method" aria-multiselectable="true"></select>
+          <p class="filter-hint">Hold Ctrl/⌘ for multi-select</p>
+        </div>
+
+        <!-- Active filter chips -->
+        <div id="active-filters-container" class="space-y-1 hidden">
+          <p class="filter-label">Active Filters</p>
+          <div id="active-filter-chips" class="flex flex-wrap gap-1"></div>
+          <button id="btn-clear-all-filters" class="text-xs text-red-400 hover:text-red-300 mt-1">Clear all filters</button>
+        </div>
+      </aside>
+
+      <!-- Sidebar Collapsed Toggle -->
+      <button id="sidebar-expand" class="hidden w-8 flex-shrink-0 border-r border-slate-800 flex items-center justify-center hover:bg-slate-800 transition-colors cursor-pointer" aria-label="Expand filters sidebar" title="Expand sidebar">
+        <span class="text-slate-500 text-xs rotate-180">◀</span>
+      </button>
+
+      <!-- Main Dashboard Panel -->
+      <main class="flex-1 overflow-y-auto p-4 space-y-6" role="main" id="dashboard-main" aria-label="Dashboard content">
+
+        <!-- Record count bar -->
+        <div class="flex items-center gap-3 text-xs text-slate-500">
+          <span id="record-count-bar">— of — transactions</span>
+          <span class="synthetic-warning px-2 py-0.5 rounded text-amber-400 border border-amber-900/50 bg-amber-950/30 text-xs font-medium">⚠ Synthetic demo data — not actual performance</span>
+        </div>
+
+        <!-- ── KPI CARDS ────────────────────────────── -->
+        <section aria-labelledby="kpi-section-title">
+          <h2 id="kpi-section-title" class="section-title">Executive KPIs</h2>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="kpi-primary-grid">
+            <!-- Injected by JS -->
+          </div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3" id="kpi-secondary-grid">
+            <!-- Injected by JS -->
+          </div>
+        </section>
+
+        <!-- ── SALES TREND ─────────────────────────── -->
+        <section class="card" aria-labelledby="trend-section-title">
+          <div class="card-header">
+            <h2 id="trend-section-title" class="card-title">A. Sales Trend Over Time</h2>
+            <div class="flex items-center gap-2 flex-wrap">
+              <div class="metric-selector" role="group" aria-label="Trend aggregation">
+                <button class="metric-btn active" data-agg="monthly" aria-pressed="true">Monthly</button>
+                <button class="metric-btn" data-agg="weekly" aria-pressed="false">Weekly</button>
+                <button class="metric-btn" data-agg="daily" aria-pressed="false">Daily</button>
+              </div>
+              <label class="flex items-center gap-1 text-xs text-slate-400 cursor-pointer">
+                <input type="checkbox" id="trend-show-volume" class="accent-blue-500" /> Volume
+              </label>
+              <label class="flex items-center gap-1 text-xs text-slate-400 cursor-pointer">
+                <input type="checkbox" id="trend-show-prev" class="accent-blue-500" /> Prior period
+              </label>
+            </div>
+          </div>
+          <div class="chart-container">
+            <canvas id="chart-trend" aria-label="Sales trend over time line chart" role="img"></canvas>
+          </div>
+          <div id="trend-anomalies" class="hidden mt-2 p-2 bg-amber-950/20 border border-amber-900/40 rounded text-xs text-amber-300"></div>
+          <div id="trend-summary" class="card-summary mt-2 text-xs text-slate-500"></div>
+        </section>
+
+        <!-- ── REGION + CATEGORY ROW ───────────────── -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          <!-- B. Revenue per Region -->
+          <section class="card" aria-labelledby="region-section-title">
+            <div class="card-header">
+              <h2 id="region-section-title" class="card-title">B. Revenue per Region</h2>
+              <div class="metric-selector" role="group" aria-label="Region metric">
+                <button class="metric-btn active" data-region-metric="revenue" aria-pressed="true">Revenue</button>
+                <button class="metric-btn" data-region-metric="transactions" aria-pressed="false">Transactions</button>
+                <button class="metric-btn" data-region-metric="quantity" aria-pressed="false">Qty</button>
+              </div>
+            </div>
+            <div class="chart-container-sm">
+              <canvas id="chart-region" aria-label="Revenue per region bar chart" role="img"></canvas>
+            </div>
+            <div id="region-drilldown-panel" class="hidden mt-2 p-3 bg-slate-800/50 rounded border border-slate-700 text-xs">
+              <div class="flex items-center justify-between mb-2">
+                <span class="font-medium text-slate-300" id="region-drilldown-title">Region Breakdown</span>
+                <button id="btn-close-region-drilldown" class="text-slate-500 hover:text-slate-300">✕</button>
+              </div>
+              <div id="region-drilldown-content"></div>
+            </div>
+            <p class="card-hint mt-1">Click a bar to drill down into category/channel composition.</p>
+          </section>
+
+          <!-- C. Revenue per Category -->
+          <section class="card" aria-labelledby="category-section-title">
+            <div class="card-header">
+              <h2 id="category-section-title" class="card-title">C. Revenue per Category</h2>
+              <div class="metric-selector" role="group" aria-label="Category metric">
+                <button class="metric-btn active" data-cat-metric="revenue" aria-pressed="true">Revenue</button>
+                <button class="metric-btn" data-cat-metric="quantity" aria-pressed="false">Qty</button>
+                <button class="metric-btn" data-cat-metric="discount" aria-pressed="false">Avg Discount</button>
+              </div>
+            </div>
+            <div class="chart-container-sm">
+              <canvas id="chart-category" aria-label="Revenue per product category bar chart" role="img"></canvas>
+            </div>
+            <p class="card-hint mt-1">Click a bar to cross-filter the dashboard by that category.</p>
+          </section>
+        </div>
+
+        <!-- ── REPS + CUSTOMER TYPE ROW ─────────────── -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          <!-- D. Sales per Representative -->
+          <section class="card" aria-labelledby="rep-section-title">
+            <div class="card-header">
+              <h2 id="rep-section-title" class="card-title">D. Sales per Representative</h2>
+              <div class="metric-selector" role="group" aria-label="Rep metric">
+                <button class="metric-btn active" data-rep-metric="revenue" aria-pressed="true">Revenue</button>
+                <button class="metric-btn" data-rep-metric="transactions" aria-pressed="false">Transactions</button>
+                <button class="metric-btn" data-rep-metric="avg_order" aria-pressed="false">Avg Order</button>
+                <button class="metric-btn" data-rep-metric="discount" aria-pressed="false">Discount</button>
+              </div>
+            </div>
+            <div class="chart-container-sm">
+              <canvas id="chart-rep" aria-label="Sales per representative bar chart" role="img"></canvas>
+            </div>
+            <p class="card-hint mt-1">Revenue concentration across reps should not be interpreted as individual productivity without territory context.</p>
+          </section>
+
+          <!-- E. Customer Type Distribution -->
+          <section class="card" aria-labelledby="cust-type-section-title">
+            <div class="card-header">
+              <h2 id="cust-type-section-title" class="card-title">E. Customer Type Distribution</h2>
+              <div class="metric-selector" role="group" aria-label="Customer metric">
+                <button class="metric-btn active" data-cust-metric="revenue" aria-pressed="true">Revenue</button>
+                <button class="metric-btn" data-cust-metric="transactions" aria-pressed="false">Transactions</button>
+                <button class="metric-btn" data-cust-metric="quantity" aria-pressed="false">Qty</button>
+              </div>
+            </div>
+            <div class="chart-container-sm flex items-center justify-center">
+              <canvas id="chart-customer-type" aria-label="Customer type distribution doughnut chart" role="img" style="max-height:240px;max-width:300px"></canvas>
+            </div>
+            <div id="cust-type-table" class="mt-2 text-xs"></div>
+          </section>
+        </div>
+
+        <!-- ── PAYMENT + CHANNEL ROW ─────────────────── -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          <!-- F. Payment Method -->
+          <section class="card" aria-labelledby="payment-section-title">
+            <div class="card-header">
+              <h2 id="payment-section-title" class="card-title">F. Payment Method Usage</h2>
+              <div class="metric-selector" role="group" aria-label="Payment metric">
+                <button class="metric-btn active" data-pay-metric="transactions" aria-pressed="true">Transactions</button>
+                <button class="metric-btn" data-pay-metric="revenue" aria-pressed="false">Revenue</button>
+                <button class="metric-btn" data-pay-metric="quantity" aria-pressed="false">Qty</button>
+              </div>
+            </div>
+            <div class="chart-container-sm">
+              <canvas id="chart-payment" aria-label="Payment method usage bar chart" role="img"></canvas>
+            </div>
+          </section>
+
+          <!-- G. Sales Channel Distribution -->
+          <section class="card" aria-labelledby="channel-section-title">
+            <div class="card-header">
+              <h2 id="channel-section-title" class="card-title">G. Sales Channel Distribution</h2>
+              <div class="metric-selector" role="group" aria-label="Channel metric">
+                <button class="metric-btn active" data-chan-metric="revenue" aria-pressed="true">Revenue</button>
+                <button class="metric-btn" data-chan-metric="transactions" aria-pressed="false">Transactions</button>
+              </div>
+            </div>
+            <div class="chart-container-sm">
+              <canvas id="chart-channel" aria-label="Sales channel distribution bar chart" role="img"></canvas>
+            </div>
+            <div id="channel-table" class="mt-2 text-xs"></div>
+          </section>
+        </div>
+
+        <!-- ── SCATTER + TOP 10 ROW ───────────────────── -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          <!-- H. Discount vs Sales Scatter -->
+          <section class="card" aria-labelledby="scatter-section-title">
+            <div class="card-header">
+              <h2 id="scatter-section-title" class="card-title">H. Discount vs Sales (Scatter)</h2>
+              <div class="flex items-center gap-2 flex-wrap">
+                <label class="flex items-center gap-1 text-xs text-slate-400 cursor-pointer">
+                  <input type="checkbox" id="scatter-show-trendline" class="accent-blue-500" /> Trendline
+                </label>
+              </div>
+            </div>
+            <div class="chart-container">
+              <canvas id="chart-scatter" aria-label="Scatter plot of discount rate versus sales amount" role="img"></canvas>
+            </div>
+            <div id="scatter-stats" class="mt-2 text-xs text-slate-500 p-2 bg-slate-800/40 rounded"></div>
+            <p class="card-hint mt-1">⚠ Correlation ≠ causation. Discount levels may be influenced by order size, channel, product mix, and customer characteristics.</p>
+          </section>
+
+          <!-- I. Top 10 Highest Sales -->
+          <section class="card" aria-labelledby="top10-section-title">
+            <div class="card-header">
+              <h2 id="top10-section-title" class="card-title">I. Top 10 Highest Sales</h2>
+              <div class="metric-selector" role="group" aria-label="Top 10 sort">
+                <button class="metric-btn active" data-top-sort="revenue" aria-pressed="true">Revenue</button>
+                <button class="metric-btn" data-top-sort="quantity" aria-pressed="false">Qty</button>
+                <button class="metric-btn" data-top-sort="discount" aria-pressed="false">Discount</button>
+              </div>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="data-table w-full text-xs" id="table-top10" aria-label="Top 10 transactions">
+                <caption class="sr-only">Top 10 highest sales transactions</caption>
+                <thead id="top10-thead"></thead>
+                <tbody id="top10-tbody"></tbody>
+              </table>
+            </div>
+            <p id="top10-count-note" class="card-hint mt-1"></p>
+          </section>
+        </div>
+
+        <!-- ── QUANTITY + PARETO ROW ──────────────────── -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          <!-- J. Quantity per Category -->
+          <section class="card" aria-labelledby="qty-section-title">
+            <div class="card-header">
+              <h2 id="qty-section-title" class="card-title">J. Quantity Sold per Category</h2>
+            </div>
+            <div class="chart-container-sm">
+              <canvas id="chart-qty-category" aria-label="Quantity sold per category bar chart" role="img"></canvas>
+            </div>
+            <div id="qty-mix-note" class="mt-2 text-xs text-slate-500 p-2 bg-slate-800/40 rounded hidden"></div>
+          </section>
+
+          <!-- Pareto / Revenue Concentration -->
+          <section class="card" aria-labelledby="pareto-section-title">
+            <div class="card-header">
+              <h2 id="pareto-section-title" class="card-title">Revenue Concentration (Pareto)</h2>
+              <div class="metric-selector" role="group" aria-label="Pareto dimension">
+                <button class="metric-btn active" data-pareto-dim="rep" aria-pressed="true">By Rep</button>
+                <button class="metric-btn" data-pareto-dim="category" aria-pressed="false">By Category</button>
+                <button class="metric-btn" data-pareto-dim="region" aria-pressed="false">By Region</button>
+              </div>
+            </div>
+            <div class="chart-container-sm">
+              <canvas id="chart-pareto" aria-label="Pareto revenue concentration chart" role="img"></canvas>
+            </div>
+            <div id="pareto-summary" class="mt-2 text-xs text-slate-500 p-2 bg-slate-800/40 rounded"></div>
+          </section>
+        </div>
+
+        <!-- ── ANALYTICAL INTELLIGENCE ────────────────── -->
+        <section class="card" aria-labelledby="insights-section-title">
+          <div class="card-header">
+            <h2 id="insights-section-title" class="card-title">🔎 Analytical Intelligence</h2>
+            <div class="metric-selector" role="group" aria-label="Intelligence tabs">
+              <button class="metric-btn active" data-intel-tab="insights" aria-pressed="true">Insights</button>
+              <button class="metric-btn" data-intel-tab="anomalies" aria-pressed="false">Anomalies</button>
+              <button class="metric-btn" data-intel-tab="rootcause" aria-pressed="false">Root Cause</button>
+              <button class="metric-btn" data-intel-tab="whatif" aria-pressed="false">What-If</button>
+              <button class="metric-btn" data-intel-tab="dq" aria-pressed="false">Data Quality</button>
+            </div>
+          </div>
+
+          <!-- Insights Panel -->
+          <div id="intel-insights" class="intel-panel">
+            <div id="insights-list" class="space-y-3"></div>
+          </div>
+
+          <!-- Anomalies Panel -->
+          <div id="intel-anomalies" class="intel-panel hidden">
+            <div id="anomalies-list" class="space-y-2"></div>
+          </div>
+
+          <!-- Root Cause Panel -->
+          <div id="intel-rootcause" class="intel-panel hidden">
+            <p class="text-xs text-slate-400 mb-3">Select a metric and period to investigate potential drivers of change.</p>
+            <div class="flex gap-2 flex-wrap mb-4">
+              <select id="rc-metric" class="filter-input w-auto text-xs">
+                <option value="revenue">Revenue</option>
+                <option value="transactions">Transactions</option>
+                <option value="quantity">Quantity</option>
+              </select>
+              <select id="rc-period-a" class="filter-input w-auto text-xs" aria-label="Period A for root cause"></select>
+              <span class="text-slate-500 self-center text-xs">vs</span>
+              <select id="rc-period-b" class="filter-input w-auto text-xs" aria-label="Period B for root cause"></select>
+              <button id="btn-run-rootcause" class="btn-primary px-3 py-1 text-xs rounded">Analyse</button>
+            </div>
+            <div id="rootcause-output" class="space-y-2 text-xs"></div>
+          </div>
+
+          <!-- What-If Panel -->
+          <div id="intel-whatif" class="intel-panel hidden">
+            <p class="text-xs text-slate-400 mb-4">Adjust parameters to model hypothetical revenue scenarios. Outputs are simulations, not forecasts.</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+              <div>
+                <label class="filter-label" for="wi-volume">Volume Change (%)</label>
+                <input type="range" id="wi-volume" min="-50" max="100" value="0" step="1" class="w-full" aria-label="Volume change percentage" />
+                <div class="flex justify-between text-xs text-slate-500"><span>-50%</span><span id="wi-volume-val" class="text-slate-200 font-medium">0%</span><span>+100%</span></div>
+              </div>
+              <div>
+                <label class="filter-label" for="wi-price">Price Change (%)</label>
+                <input type="range" id="wi-price" min="-30" max="50" value="0" step="1" class="w-full" aria-label="Price change percentage" />
+                <div class="flex justify-between text-xs text-slate-500"><span>-30%</span><span id="wi-price-val" class="text-slate-200 font-medium">0%</span><span>+50%</span></div>
+              </div>
+              <div>
+                <label class="filter-label" for="wi-discount">Discount Change (pp)</label>
+                <input type="range" id="wi-discount" min="-20" max="20" value="0" step="1" class="w-full" aria-label="Discount change in percentage points" />
+                <div class="flex justify-between text-xs text-slate-500"><span>-20pp</span><span id="wi-discount-val" class="text-slate-200 font-medium">0pp</span><span>+20pp</span></div>
+              </div>
+            </div>
+            <div id="whatif-output" class="p-3 bg-slate-800/50 rounded border border-slate-700 text-sm"></div>
+          </div>
+
+          <!-- Data Quality Panel -->
+          <div id="intel-dq" class="intel-panel hidden">
+            <div id="dq-summary" class="mb-3 p-3 bg-slate-800/50 rounded border border-slate-700 text-xs"></div>
+            <div id="dq-issues-list" class="space-y-2"></div>
+          </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="text-center text-xs text-slate-600 border-t border-slate-800 pt-4 pb-6 mt-4" role="contentinfo">
+          <p>Sales Intelligence Command Centre — Synthetic Demo Data</p>
+          <p class="mt-1">Data loaded from <code class="text-slate-500">data/sales.json</code> | Not connected to a live database</p>
+          <p class="mt-1">Build with Tailwind CSS · Chart.js · Vanilla JS</p>
+        </footer>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- Print-friendly container -->
+  <div id="print-area" class="hidden print:block">
+    <div id="print-content"></div>
+  </div>
+
+  <!-- Application Script -->
+  <script src="script.js"></script>
+</body>
+</html>
